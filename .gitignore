@@ -1,48 +1,25 @@
-# Node modules
+# Dependencies
 node_modules/
-**/node_modules/
-
-# Environment files
-.env
-.env.local
-.env.*.local
-**/.env
+jspm_packages/
+.npm/
 
 # Build outputs
 dist/
-build/
-**/dist/
-**/build/
+.cache
+*.tsbuildinfo
 
-# Logs
-*.log
+# Secrets & Environment
+.env
+.env.local
+*.pem
+*.key
+
+# Logs & Debugging
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 logs/
+*.log
 
-# OS files
+# OS Junk
 .DS_Store
-Thumbs.db
-
-# IDE files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Docker volumes
-mysql_data/
-
-# Temporary files
-.tmp/
-tmp/
-*.tmp
-
-# Test coverage
-coverage/
-.nyc_output/
-
-# Session files
-sessions/*.jsonl

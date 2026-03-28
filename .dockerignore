@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.gitignore
+.dockerignore
+README.md
+LICENSE
+
+# Prevent sending local logs to the image
+*.log
+
+# Prevent sending local env files to the image
+.env
