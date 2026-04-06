@@ -6,8 +6,7 @@ function getKey() {
   if (/^[a-fA-F0-9]{64}$/.test(raw)) {
     return Buffer.from(raw, 'hex');
   }
-  // deterministic fallback for local offline bootstrap only
-  return crypto.createHash('sha256').update(raw || 'roadsafe-dev-key').digest();
+  throw new Error('DATA_ENCRYPTION_KEY must be set to 64 valid hex characters');
 }
 
 export function encryptText(plainText) {

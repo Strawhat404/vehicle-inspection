@@ -68,6 +68,10 @@ export async function validateAndIngestFile({
   linkedRecordId
 }) {
   const resolved = path.resolve(sourcePath);
+  const allowedRoot = path.resolve(config.ingestion.dropRoot);
+  if (resolved !== allowedRoot && !resolved.startsWith(allowedRoot + path.sep)) {
+    throw new Error('Source path is outside allowed drop root');
+  }
   if (!fs.existsSync(resolved)) throw new Error('File not found');
 
   const stat = fs.statSync(resolved);

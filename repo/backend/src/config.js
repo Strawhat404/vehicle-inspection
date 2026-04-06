@@ -43,6 +43,9 @@ export const config = {
   ingestion: {
     dropRoot: mustHave('INGEST_DROP_ROOT', '/var/roadsafe/dropzone')
   },
+  audit: {
+    exportDir: mustHave('AUDIT_EXPORT_DIR', '/var/roadsafe/audit-exports')
+  },
   tls: {
     enabled: String(mustHave('TLS_ENABLED', 'true')).toLowerCase() === 'true',
     certPath: mustHave('TLS_CERT_PATH', './certs/server.crt'),

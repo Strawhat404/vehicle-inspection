@@ -10,12 +10,53 @@ import { safeLog } from '../utils/redaction.js';
 
 const router = new Router({ prefix: '/api/auth' });
 
+const LOGIN_MAX_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 15 * 60 * 1000; // 15 minutes
+
+// username -> { count: number, lockedUntil: number }
+const loginAttempts = new Map();
+
+function isLockedOut(username) {
+  const entry = loginAttempts.get(username);
+  if (!entry) return false;
+  if (entry.lockedUntil && Date.now() < entry.lockedUntil) return true;
+  if (entry.lockedUntil && Date.now() >= entry.lockedUntil) {
+    loginAttempts.delete(username);
+  }
+  return false;
+}
+
+function recordFailedAttempt(username) {
+  const entry = loginAttempts.get(username) || { count: 0, lockedUntil: null };
+  entry.count += 1;
+  if (entry.count >= LOGIN_MAX_ATTEMPTS) {
+    entry.lockedUntil = Date.now() + LOGIN_LOCKOUT_MS;
+  }
+  loginAttempts.set(username, entry);
+}
+
+function clearAttempts(username) {
+  loginAttempts.delete(username);
+}
+
 router.post('/login', async (ctx) => {
   const { username, password } = ctx.request.body || {};
   const normalizedUsername = typeof username === 'string' ? username.trim() : '';
+  const lockoutKey = normalizedUsername.toLowerCase();
   if (!normalizedUsername || !password) {
     ctx.status = 400;
     ctx.body = { error: 'username and password are required' };
+    return;
+  }
+
+  if (isLockedOut(lockoutKey)) {
+    await query(
+      `INSERT INTO security_alerts (actor_user_id, alert_type, severity, details)
+       VALUES (NULL, 'account_locked_login_attempt', 'high', ?)`,
+      [JSON.stringify({ username: normalizedUsername, ip: ctx.ip })]
+    );
+    ctx.status = 429;
+    ctx.body = { error: 'Account temporarily locked due to too many failed login attempts' };
     return;
   }
 
@@ -29,6 +70,7 @@ router.post('/login', async (ctx) => {
   );
 
   if (!users.length) {
+    recordFailedAttempt(lockoutKey);
     ctx.status = 401;
     ctx.body = { error: 'Invalid credentials' };
     return;
@@ -49,10 +91,13 @@ router.post('/login', async (ctx) => {
   }
 
   if (!valid) {
+    recordFailedAttempt(lockoutKey);
     ctx.status = 401;
     ctx.body = { error: 'Invalid credentials' };
     return;
   }
+
+  clearAttempts(lockoutKey);
 
   const token = generateToken();
   const ttlHours = config.sessionTtlHours;

@@ -1,23 +1,9 @@
 import fs from 'fs';
 import path from 'path';
 import { query } from '../db.js';
+import { config } from '../config.js';
 
-const RETENTION_YEARS = 2;
-
-export async function purgeExpiredAuditEvents() {
-  const result = await query(
-    `DELETE FROM audit_events
-     WHERE event_time < DATE_SUB(UTC_TIMESTAMP(), INTERVAL ? YEAR)`,
-    [RETENTION_YEARS]
-  );
-
-  return {
-    purged: Number(result.affectedRows || 0),
-    retentionYears: RETENTION_YEARS
-  };
-}
-
-export async function exportAuditLedger({ outputDir = '/tmp' } = {}) {
+export async function exportAuditLedger() {
   const rows = await query(
     `SELECT id, event_time, actor_user_id, actor_role, action, target_table, target_record_id,
             location_code, department_code, event_hash, details
@@ -25,10 +11,10 @@ export async function exportAuditLedger({ outputDir = '/tmp' } = {}) {
      ORDER BY id ASC`
   );
 
-  const safeDir = path.resolve(outputDir);
-  fs.mkdirSync(safeDir, { recursive: true });
+  const allowedRoot = path.resolve(config.audit.exportDir);
+  fs.mkdirSync(allowedRoot, { recursive: true });
 
-  const filePath = path.join(safeDir, `audit-ledger-${Date.now()}.jsonl`);
+  const filePath = path.join(allowedRoot, `audit-ledger-${Date.now()}.jsonl`);
   const jsonl = rows.map((row) => JSON.stringify(row)).join('\n');
   fs.writeFileSync(filePath, jsonl ? `${jsonl}\n` : '', 'utf8');
 

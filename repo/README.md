@@ -26,7 +26,7 @@ docker compose up
 ## 📁 Project Structure
 
 ```
-task2/
+task4/
 ├── metadata.json           # Project metadata (TASK-15 standard)
 ├── docs/                   # Documentation
 │   ├── README.md          # Original prompt

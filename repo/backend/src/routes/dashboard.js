@@ -101,20 +101,25 @@ router.get('/summary', authRequired, enforceScope(), async (ctx) => {
   if (['Administrator', 'Data Engineer', 'Coordinator'].includes(user.role)) {
     const healthRows = await query(
       `SELECT
-        (SELECT COUNT(*) FROM ingestion_jobs WHERE status = 'queued') AS queued,
-        (SELECT COUNT(*) FROM ingestion_jobs WHERE status = 'running') AS running,
-        (SELECT COUNT(*) FROM ingestion_jobs WHERE status = 'failed' AND updated_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 24 HOUR)) AS failed_24h`
+        (SELECT COUNT(*) FROM ingestion_jobs ij JOIN users u ON u.id = ij.submitted_by WHERE ij.status = 'queued' AND u.location_code = ? AND u.department_code = ?) AS queued,
+        (SELECT COUNT(*) FROM ingestion_jobs ij JOIN users u ON u.id = ij.submitted_by WHERE ij.status = 'running' AND u.location_code = ? AND u.department_code = ?) AS running,
+        (SELECT COUNT(*) FROM ingestion_jobs ij JOIN users u ON u.id = ij.submitted_by WHERE ij.status = 'failed' AND ij.updated_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL 24 HOUR) AND u.location_code = ? AND u.department_code = ?) AS failed_24h`,
+      [user.locationCode, user.departmentCode, user.locationCode, user.departmentCode, user.locationCode, user.departmentCode]
     );
     ingestionHealth.queued = healthRows[0]?.queued ?? 0;
     ingestionHealth.running = healthRows[0]?.running ?? 0;
     ingestionHealth.failed_24h = healthRows[0]?.failed_24h ?? 0;
 
     const recentJobs = await query(
-      `SELECT id, job_type, status, started_at
-       FROM ingestion_jobs
-       WHERE started_at IS NOT NULL
-       ORDER BY started_at DESC
-       LIMIT 5`
+      `SELECT ij.id, ij.job_type, ij.status, ij.started_at
+       FROM ingestion_jobs ij
+       JOIN users u ON u.id = ij.submitted_by
+       WHERE ij.started_at IS NOT NULL
+         AND u.location_code = ?
+         AND u.department_code = ?
+       ORDER BY ij.started_at DESC
+       LIMIT 5`,
+      [user.locationCode, user.departmentCode]
     );
     ingestionHealth.recent_jobs = recentJobs;
   }

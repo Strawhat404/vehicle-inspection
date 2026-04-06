@@ -24,7 +24,6 @@
     </form>
 
     <p v-if="error" class="mt-3 text-sm text-red-600">{{ error }}</p>
-    <p class="mt-3 text-xs text-slate-500">Default admin: <code>admin / Admin@123456</code></p>
   </section>
 </template>
 

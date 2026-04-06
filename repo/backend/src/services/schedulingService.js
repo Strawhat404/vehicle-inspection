@@ -1,4 +1,4 @@
-import { query } from '../db.js';
+import { query, getConnection } from '../db.js';
 
 const SLOT_MINUTES = 30;
 const RECALIBRATION_AFTER_TESTS = 8;
@@ -181,26 +181,34 @@ export async function scheduleAppointment({
   const equipmentResourceId = await selectAvailableEquipment({ locationCode, departmentCode, slotStart });
   if (!equipmentResourceId) throw new Error('No available required equipment set for selected slot');
 
-  await query(
-    `INSERT INTO appointments
-      (customer_id, coordinator_id, inspector_id, location_code, department_code, scheduled_at, status, notes)
-     VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
-    [customerId, coordinatorId, inspectorId, locationCode, departmentCode, slotStart, notes || null]
-  );
-
-  const created = await query('SELECT LAST_INSERT_ID() AS id');
-  const appointmentId = created[0].id;
-
+  const conn = await getConnection();
+  let appointmentId;
   try {
-    await query(
+    await conn.beginTransaction();
+
+    await conn.query(
+      `INSERT INTO appointments
+        (customer_id, coordinator_id, inspector_id, location_code, department_code, scheduled_at, status, notes)
+       VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?)`,
+      [customerId, coordinatorId, inspectorId, locationCode, departmentCode, slotStart, notes || null]
+    );
+
+    const [createdRows] = await conn.query('SELECT LAST_INSERT_ID() AS id');
+    appointmentId = createdRows[0].id;
+
+    await conn.query(
       `INSERT INTO bay_capacity_locks
         (appointment_id, bay_resource_id, inspector_id, equipment_resource_id, slot_start, slot_end, location_code, department_code)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [appointmentId, bayResourceId, inspectorId, equipmentResourceId, slotStart, slotEnd, locationCode, departmentCode]
     );
+
+    await conn.commit();
   } catch (_err) {
-    await query('DELETE FROM appointments WHERE id = ?', [appointmentId]);
+    await conn.rollback();
     throw new Error('Overbooking prevented by resource lock constraints');
+  } finally {
+    conn.release();
   }
 
   await maybeReserveRecalibration(equipmentResourceId, slotStart);

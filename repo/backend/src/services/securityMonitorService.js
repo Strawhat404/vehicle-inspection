@@ -6,7 +6,7 @@ const HIGH_PRIV = new Set(['Administrator', 'Data Engineer']);
 export async function detectPrivilegeEscalation({ actorUserId, actorRole, action, targetUserId, assignedRole }) {
   if (action !== 'iam.user.create' && action !== 'iam.user.role_update') return null;
 
-  const escalation = HIGH_PRIV.has(String(assignedRole || '')) && !HIGH_PRIV.has(String(actorRole || ''));
+  const escalation = HIGH_PRIV.has(String(assignedRole || ''));
   if (!escalation) return null;
 
   await query(

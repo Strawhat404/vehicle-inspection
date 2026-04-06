@@ -4,6 +4,12 @@ const REPORT_RETENTION_YEARS = 7;
 const ACCOUNT_CLOSURE_DAYS = 30;
 
 export async function createAccountClosureRequest(userId) {
+  const existing = await query(
+    `SELECT id FROM account_closure_requests WHERE user_id = ? AND status = 'pending' LIMIT 1`,
+    [userId]
+  );
+  if (existing.length) return existing[0].id;
+
   await query(
     `INSERT INTO account_closure_requests (user_id, due_by, status)
      VALUES (?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? DAY), 'pending')`,

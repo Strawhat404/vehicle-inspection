@@ -2,7 +2,7 @@ import Router from 'koa-router';
 import { query } from '../db.js';
 import { authRequired } from '../middleware/auth.js';
 import { requireRoles } from '../middleware/rbac.js';
-import { exportAuditLedger, purgeExpiredAuditEvents } from '../services/auditRetentionService.js';
+import { exportAuditLedger } from '../services/auditRetentionService.js';
 
 const router = new Router({ prefix: '/api/audit' });
 
@@ -64,13 +64,7 @@ router.get('/events', authRequired, requireRoles('Administrator'), async (ctx) =
 });
 
 router.post('/export', authRequired, requireRoles('Administrator'), async (ctx) => {
-  const outputDir = typeof ctx.request.body?.output_dir === 'string' ? ctx.request.body.output_dir : '/tmp';
-  const result = await exportAuditLedger({ outputDir });
-  ctx.body = result;
-});
-
-router.post('/retention/purge', authRequired, requireRoles('Administrator'), async (ctx) => {
-  const result = await purgeExpiredAuditEvents();
+  const result = await exportAuditLedger();
   ctx.body = result;
 });
 
