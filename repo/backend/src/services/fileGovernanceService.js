@@ -132,3 +132,5 @@ export async function validateAndIngestFile({
     sensitivePattern: sensitiveMatch
   };
 }
+
+export const _testables = { hashContent, scanSensitive, MAX_FILE_BYTES, ALLOWED_MIME, ALLOWED_EXT };

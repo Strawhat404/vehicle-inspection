@@ -186,3 +186,5 @@ export async function trendingKeywords(actor = null) {
   );
   return rows;
 }
+
+export const _testables = { buildWhere, sortClause, PAGE_SIZE };

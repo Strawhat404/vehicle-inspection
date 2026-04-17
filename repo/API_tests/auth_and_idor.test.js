@@ -1,57 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { request, loginAdmin, createUser, createUserAndLogin } from './helpers/setup.js';
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
-async function resolveBase() {
-  const candidates = [process.env.API_BASE_URL, 'https://localhost:4000', 'http://localhost:4000'].filter(Boolean);
-  for (const base of candidates) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) return base;
-    } catch {
-      // continue
-    }
-  }
-  return null;
-}
-
-async function request(base, path, { method = 'GET', token = '', body } = {}) {
-  const res = await fetch(`${base}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}`, 'X-CSRF-Token': token } : {})
-    },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  let data = {};
-  try { data = await res.json(); } catch { data = {}; }
-  return { status: res.status, data };
-}
-
-async function login(base, username, password) {
-  const { status, data } = await request(base, '/api/auth/login', {
-    method: 'POST',
-    body: { username, password }
-  });
-  assert.equal(status, 200, `login failed for ${username}: ${JSON.stringify(data)}`);
-  return data.token;
-}
-
-async function registerUser(base, adminToken, payload) {
-  const res = await request(base, '/api/auth/register', {
-    method: 'POST',
-    token: adminToken,
-    body: payload
-  });
-  assert.equal(res.status, 201, `register failed: ${JSON.stringify(res.data)}`);
-}
-
-test('unauthenticated requests to protected routes return 401', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
-
+test('unauthenticated requests to protected routes return 401', async () => {
   const routes = [
     '/api/users?page=1&pageSize=5',
     '/api/coordinator/bay-utilization',
@@ -62,31 +13,20 @@ test('unauthenticated requests to protected routes return 401', async (t) => {
   ];
 
   for (const route of routes) {
-    const { status } = await request(base, route);
+    const { status } = await request(route);
     assert.equal(status, 401, `expected 401 for ${route}, got ${status}`);
   }
 });
 
-test('non-admin cannot register users (403)', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
-
-  const adminToken = await login(base, 'admin', 'Admin@123456');
-
-  const coordUsername = `coord_reg_${Date.now()}`;
-  await registerUser(base, adminToken, {
-    username: coordUsername,
-    full_name: 'Reg Test Coord',
-    password: 'Coordinator@123',
+test('non-admin cannot register users (403)', async () => {
+  const adminToken = await loginAdmin();
+  const { token: coordToken } = await createUserAndLogin(adminToken, {
     role_name: 'Coordinator',
     location_code: 'HQ',
-    department_code: 'OPS',
-    email: `${coordUsername}@roadsafe.internal`
+    department_code: 'OPS'
   });
 
-  const coordToken = await login(base, coordUsername, 'Coordinator@123');
-
-  const { status } = await request(base, '/api/auth/register', {
+  const { status, data } = await request('/api/auth/register', {
     method: 'POST',
     token: coordToken,
     body: {
@@ -99,106 +39,67 @@ test('non-admin cannot register users (403)', async (t) => {
       email: `fail_${Date.now()}@roadsafe.internal`
     }
   });
-  assert.equal(status, 403);
+  assert.equal(status, 403, `expected 403 for non-admin register, got ${status}: ${JSON.stringify(data)}`);
 });
 
-test('invalid credentials return 401', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
-
-  const { status } = await request(base, '/api/auth/login', {
+test('invalid credentials return 401', async () => {
+  const { status, data } = await request('/api/auth/login', {
     method: 'POST',
     body: { username: 'admin', password: 'WrongPassword!' }
   });
-  assert.equal(status, 401);
+  assert.equal(status, 401, `expected 401 for bad credentials, got ${status}: ${JSON.stringify(data)}`);
 });
 
-test('missing required fields on register return 400', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
+test('missing required fields on register return 400 with error detail', async () => {
+  const adminToken = await loginAdmin();
 
-  const adminToken = await login(base, 'admin', 'Admin@123456');
-
-  const { status, data } = await request(base, '/api/auth/register', {
+  const { status, data } = await request('/api/auth/register', {
     method: 'POST',
     token: adminToken,
     body: { username: 'incomplete_user' }
   });
-  assert.equal(status, 400);
-  assert.ok(data.error);
+  assert.equal(status, 400, `expected 400 for incomplete register payload, got ${status}`);
+  assert.ok(data.error, 'response must include an error field describing the missing fields');
+  assert.equal(typeof data.error, 'string', 'error field must be a string');
 });
 
-test('IDOR: coordinator cannot access admin-only users list', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
-
-  const adminToken = await login(base, 'admin', 'Admin@123456');
-
-  const coordUsername = `coord_idor_${Date.now()}`;
-  await registerUser(base, adminToken, {
-    username: coordUsername,
-    full_name: 'IDOR Test Coord',
-    password: 'Coordinator@123',
+test('IDOR: coordinator cannot access admin-only users list (403)', async () => {
+  const adminToken = await loginAdmin();
+  const { token: coordToken } = await createUserAndLogin(adminToken, {
     role_name: 'Coordinator',
     location_code: 'HQ',
-    department_code: 'OPS',
-    email: `${coordUsername}@roadsafe.internal`
+    department_code: 'OPS'
   });
 
-  const coordToken = await login(base, coordUsername, 'Coordinator@123');
-
-  // Admin-only endpoint
-  const { status } = await request(base, '/api/users?page=1&pageSize=5', { token: coordToken });
-  assert.equal(status, 403);
+  const { status, data } = await request('/api/users?page=1&pageSize=5', { token: coordToken });
+  assert.equal(status, 403, `expected 403 for coordinator accessing admin users list, got ${status}: ${JSON.stringify(data)}`);
 });
 
-test('IDOR: seat assignment with out-of-scope appointment_id returns 403', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
-
-  const adminToken = await login(base, 'admin', 'Admin@123456');
-
-  const coordUsername = `coord_seat_idor_${Date.now()}`;
-  await registerUser(base, adminToken, {
-    username: coordUsername,
-    full_name: 'Seat IDOR Coord',
-    password: 'Coordinator@123',
+test('IDOR: seat assignment with out-of-scope appointment_id returns 403', async () => {
+  const adminToken = await loginAdmin();
+  const { token: coordToken } = await createUserAndLogin(adminToken, {
     role_name: 'Coordinator',
     location_code: 'HQ',
-    department_code: 'OPS',
-    email: `${coordUsername}@roadsafe.internal`
+    department_code: 'OPS'
   });
 
-  const coordToken = await login(base, coordUsername, 'Coordinator@123');
-
-  const { status } = await request(base, '/api/coordinator/waiting-room/assign-seat', {
+  const { status, data } = await request('/api/coordinator/waiting-room/assign-seat', {
     method: 'POST',
     token: coordToken,
     body: { seat_id: 1, appointment_id: 999999, location_code: 'HQ', department_code: 'OPS' }
   });
-  assert.equal(status, 403);
+  assert.equal(status, 403, `expected 403 for out-of-scope seat assignment, got ${status}: ${JSON.stringify(data)}`);
 });
 
-test('cross-scope scheduling returns 403', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
-
-  const adminToken = await login(base, 'admin', 'Admin@123456');
-
-  const coordUsername = `coord_scope_${Date.now()}`;
-  await registerUser(base, adminToken, {
-    username: coordUsername,
-    full_name: 'Scope Test Coord',
-    password: 'Coordinator@123',
+test('cross-scope scheduling returns 403', async () => {
+  const adminToken = await loginAdmin();
+  const { token: coordToken } = await createUserAndLogin(adminToken, {
     role_name: 'Coordinator',
     location_code: 'HQ',
-    department_code: 'OPS',
-    email: `${coordUsername}@roadsafe.internal`
+    department_code: 'OPS'
   });
 
-  const coordToken = await login(base, coordUsername, 'Coordinator@123');
-
-  const { status } = await request(base, '/api/coordinator/appointments/schedule', {
+  const { status, data } = await request('/api/coordinator/appointments/schedule', {
     method: 'POST',
     token: coordToken,
     body: {
@@ -210,32 +111,21 @@ test('cross-scope scheduling returns 403', async (t) => {
       notes: 'cross scope test'
     }
   });
-  assert.equal(status, 403);
+  assert.equal(status, 403, `expected 403 for cross-scope scheduling, got ${status}: ${JSON.stringify(data)}`);
 });
 
-test('logout invalidates session token', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
-
-  const adminToken = await login(base, 'admin', 'Admin@123456');
-
-  const coordUsername = `coord_logout_${Date.now()}`;
-  await registerUser(base, adminToken, {
-    username: coordUsername,
-    full_name: 'Logout Test',
-    password: 'Coordinator@123',
+test('logout invalidates session token', async () => {
+  const adminToken = await loginAdmin();
+  const { token } = await createUserAndLogin(adminToken, {
     role_name: 'Coordinator',
     location_code: 'HQ',
-    department_code: 'OPS',
-    email: `${coordUsername}@roadsafe.internal`
+    department_code: 'OPS'
   });
 
-  const token = await login(base, coordUsername, 'Coordinator@123');
-
-  const logoutRes = await request(base, '/api/auth/logout', { method: 'POST', token });
-  assert.equal(logoutRes.status, 200);
+  const logoutRes = await request('/api/auth/logout', { method: 'POST', token });
+  assert.equal(logoutRes.status, 200, `logout should return 200, got ${logoutRes.status}: ${JSON.stringify(logoutRes.data)}`);
 
   // Token should now be invalid
-  const afterLogout = await request(base, '/api/auth/me', { token });
-  assert.equal(afterLogout.status, 401);
+  const afterLogout = await request('/api/auth/me', { token });
+  assert.equal(afterLogout.status, 401, `token should be invalid after logout, got ${afterLogout.status}`);
 });

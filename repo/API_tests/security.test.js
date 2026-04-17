@@ -1,78 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { request, loginAdmin, createUserAndLogin } from './helpers/setup.js';
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-
-async function resolveBase() {
-  const candidates = [process.env.API_BASE_URL, 'https://localhost:4000', 'http://localhost:4000'].filter(Boolean);
-  for (const base of candidates) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) return base;
-    } catch {
-      // continue
-    }
-  }
-  return null;
-}
-
-async function request(base, path, { method = 'GET', token = '', body } = {}) {
-  const res = await fetch(`${base}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}`, 'X-CSRF-Token': token } : {})
-    },
-    body: body ? JSON.stringify(body) : undefined
-  });
-
-  let data = {};
-  try {
-    data = await res.json();
-  } catch {
-    data = {};
-  }
-  return { status: res.status, data };
-}
-
-async function login(base, username, password) {
-  const { status, data } = await request(base, '/api/auth/login', {
-    method: 'POST',
-    body: { username, password }
-  });
-  assert.equal(status, 200, `login failed for ${username}: ${JSON.stringify(data)}`);
-  return data.token;
-}
-
-async function createUser(base, adminToken, payload) {
-  const { status } = await request(base, '/api/auth/register', {
-    method: 'POST',
-    token: adminToken,
-    body: payload
-  });
-  assert.equal(status, 201);
-}
-
-test('security: IDOR seat assignment blocked and sensitive fields masked for non-admin', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
-
-  const adminToken = await login(base, 'admin', 'Admin@123456');
-
-  const coordinatorUsername = `coord_security_${Date.now()}`;
-  await createUser(base, adminToken, {
-    username: coordinatorUsername,
-    full_name: 'Security Coordinator',
-    password: 'Coordinator@123',
+test('security: IDOR seat assignment blocked and sensitive fields masked for non-admin', async () => {
+  const adminToken = await loginAdmin();
+  const { token: coordinatorToken } = await createUserAndLogin(adminToken, {
     role_name: 'Coordinator',
     location_code: 'HQ',
-    department_code: 'OPS',
-    email: `${coordinatorUsername}@roadsafe.internal`
+    department_code: 'OPS'
   });
 
-  const coordinatorToken = await login(base, coordinatorUsername, 'Coordinator@123');
-
-  const idor = await request(base, '/api/coordinator/waiting-room/assign-seat', {
+  // IDOR: coordinator must not assign a seat for an appointment they do not own
+  const { status: idorStatus, data: idorData } = await request('/api/coordinator/waiting-room/assign-seat', {
     method: 'POST',
     token: coordinatorToken,
     body: {
@@ -82,14 +21,32 @@ test('security: IDOR seat assignment blocked and sensitive fields masked for non
       department_code: 'OPS'
     }
   });
-  assert.equal(idor.status, 403);
+  assert.equal(idorStatus, 403,
+    `expected 403 for out-of-scope seat assignment, got ${idorStatus}: ${JSON.stringify(idorData)}`);
 
-  const search = await request(base, '/api/search/vehicles?page=1', {
+  // Sensitive field masking: plate_number and VIN must be redacted for non-admin roles
+  const { status: searchStatus, data: searchData } = await request('/api/search/vehicles?page=1', {
     token: coordinatorToken
   });
-  assert.equal(search.status, 200);
-  if (Array.isArray(search.data.rows) && search.data.rows.length > 0) {
-    assert.equal(search.data.rows[0].plate_number, '***REDACTED***');
-    assert.equal(search.data.rows[0].vin, '***REDACTED***');
+  assert.equal(searchStatus, 200,
+    `search should return 200, got ${searchStatus}: ${JSON.stringify(searchData)}`);
+  assert.ok(Array.isArray(searchData.rows), 'search response must include a rows array');
+
+  if (searchData.rows.length > 0) {
+    const first = searchData.rows[0];
+
+    // Verify basic vehicle record structure is present
+    assert.ok('brand' in first || 'model_name' in first,
+      `search result must include vehicle fields: ${JSON.stringify(first)}`);
+
+    // Sensitive fields must be redacted for coordinators
+    assert.equal(first.plate_number, '***REDACTED***',
+      `plate_number must be redacted for coordinator, got: ${first.plate_number}`);
+    assert.equal(first.vin, '***REDACTED***',
+      `vin must be redacted for coordinator, got: ${first.vin}`);
+
+    // Ensure no raw PII leaks under alternate field names
+    assert.ok(!first.license_plate || first.license_plate === '***REDACTED***',
+      `license_plate must be absent or redacted, got: ${first.license_plate}`);
   }
 });

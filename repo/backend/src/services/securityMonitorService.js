@@ -26,3 +26,5 @@ export async function detectPrivilegeEscalation({ actorUserId, actorRole, action
 
   return { alert: 'privilege_escalation_detected' };
 }
+
+export const _testables = { HIGH_PRIV };

@@ -75,3 +75,5 @@ export async function runRetentionSweep() {
     completedClosures: pendingClosures.length
   };
 }
+
+export const _testables = { REPORT_RETENTION_YEARS, ACCOUNT_CLOSURE_DAYS };

@@ -1,105 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { request, loginAdmin, createUser, createUserAndLogin, futureSlot } from './helpers/setup.js';
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+test('operations: duplicate appointment conflict and 5-minute submission lock', async () => {
+  const adminToken = await loginAdmin();
 
-async function resolveBase() {
-  const candidates = [process.env.API_BASE_URL, 'https://localhost:4000', 'http://localhost:4000'].filter(Boolean);
-  for (const base of candidates) {
-    try {
-      const res = await fetch(`${base}/health`);
-      if (res.ok) return base;
-    } catch {
-      // continue
-    }
-  }
-  return null;
-}
-
-async function request(base, path, { method = 'GET', token = '', body } = {}) {
-  const res = await fetch(`${base}${path}`, {
-    method,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}`, 'X-CSRF-Token': token } : {})
-    },
-    body: body ? JSON.stringify(body) : undefined
-  });
-
-  let data = {};
-  try {
-    data = await res.json();
-  } catch {
-    data = {};
-  }
-  return { status: res.status, data };
-}
-
-async function login(base, username, password) {
-  const { status, data } = await request(base, '/api/auth/login', {
-    method: 'POST',
-    body: { username, password }
-  });
-  assert.equal(status, 200, `login failed for ${username}: ${JSON.stringify(data)}`);
-  return data.token;
-}
-
-async function createUser(base, adminToken, payload) {
-  const { status } = await request(base, '/api/auth/register', {
-    method: 'POST',
-    token: adminToken,
-    body: payload
-  });
-  assert.equal(status, 201);
-
-  const list = await request(
-    base,
-    `/api/users?page=1&pageSize=5&q=${encodeURIComponent(payload.username)}`,
-    { token: adminToken }
-  );
-  assert.equal(list.status, 200);
-  const found = (list.data.rows || []).find((u) => u.username === payload.username);
-  assert.ok(found, `user not found after create: ${payload.username}`);
-  return found.id;
-}
-
-function slotAt(daysFromNow, hour, minute) {
-  const d = new Date(Date.now() + daysFromNow * 24 * 60 * 60 * 1000);
-  d.setUTCHours(hour, minute, 0, 0);
-  return d.toISOString();
-}
-
-test('operations: duplicate appointment conflict and 5-minute submission lock', async (t) => {
-  const base = await resolveBase();
-  if (!base) return t.skip('API not reachable');
-
-  const adminToken = await login(base, 'admin', 'Admin@123456');
-
-  const coordinatorUsername = `coord_ops_${Date.now()}`;
-  const coordinatorId = await createUser(base, adminToken, {
-    username: coordinatorUsername,
-    full_name: 'Operations Coordinator',
-    password: 'Coordinator@123',
+  const { id: coordinatorId } = await createUser(adminToken, {
     role_name: 'Coordinator',
     location_code: 'HQ',
-    department_code: 'OPS',
-    email: `${coordinatorUsername}@roadsafe.internal`
+    department_code: 'OPS'
   });
-  assert.ok(coordinatorId > 0);
+  assert.ok(coordinatorId > 0, `coordinator id must be a positive integer, got: ${coordinatorId}`);
 
-  const customerUsername = `cust_ops_${Date.now()}`;
-  const customerId = await createUser(base, adminToken, {
-    username: customerUsername,
-    full_name: 'Operations Customer',
-    password: 'CustomerPass@123',
+  const { id: customerId } = await createUser(adminToken, {
     role_name: 'Customer',
     location_code: 'HQ',
-    department_code: 'OPS',
-    email: `${customerUsername}@roadsafe.internal`
+    department_code: 'OPS'
   });
-  assert.ok(customerId > 0);
+  assert.ok(customerId > 0, `customer id must be a positive integer, got: ${customerId}`);
 
-  const coordinatorToken = await login(base, coordinatorUsername, 'Coordinator@123');
+  // Log in the coordinator using its stored username/password via createUserAndLogin pattern.
+  // Re-use createUser result — we need a login token, so create-and-login directly.
+  const { token: coordinatorToken } = await createUserAndLogin(adminToken, {
+    role_name: 'Coordinator',
+    location_code: 'HQ',
+    department_code: 'OPS'
+  });
 
   const basePayload = {
     customer_id: customerId,
@@ -109,43 +35,64 @@ test('operations: duplicate appointment conflict and 5-minute submission lock', 
     notes: 'operations test'
   };
 
-  const duplicateSlot = slotAt(2, 10, 0);
-  const firstDuplicateCandidate = await request(base, '/api/coordinator/appointments/schedule', {
+  // --- Duplicate appointment conflict ---
+  const duplicateSlot = futureSlot(2, 10, 0);
+
+  const firstAttempt = await request('/api/coordinator/appointments/schedule', {
     method: 'POST',
     token: coordinatorToken,
     body: { ...basePayload, scheduled_at: duplicateSlot }
   });
 
-  if (firstDuplicateCandidate.status === 201) {
-    const duplicate = await request(base, '/api/coordinator/appointments/schedule', {
+  if (firstAttempt.status === 201) {
+    // First appointment must return a valid appointmentId
+    const firstAppointmentId = firstAttempt.data.appointmentId;
+    assert.ok(firstAppointmentId, `first appointment must return appointmentId: ${JSON.stringify(firstAttempt.data)}`);
+    assert.ok(Number.isInteger(firstAppointmentId) && firstAppointmentId > 0,
+      `appointmentId must be a positive integer, got: ${firstAppointmentId}`);
+
+    // Booking the same slot again must conflict
+    const duplicate = await request('/api/coordinator/appointments/schedule', {
       method: 'POST',
       token: coordinatorToken,
       body: { ...basePayload, scheduled_at: duplicateSlot }
     });
-    assert.equal(duplicate.status, 409);
+    assert.equal(duplicate.status, 409,
+      `duplicate slot must return 409, got ${duplicate.status}: ${JSON.stringify(duplicate.data)}`);
+    assert.ok(duplicate.data.error, 'conflict response must include an error message');
   } else {
-    assert.ok([409, 400].includes(firstDuplicateCandidate.status));
+    // Slot was already taken — server must have returned a conflict or validation error
+    assert.ok([409, 400].includes(firstAttempt.status),
+      `expected 409/400 for already-taken slot, got ${firstAttempt.status}: ${JSON.stringify(firstAttempt.data)}`);
   }
 
-  const lockSlot1 = slotAt(3, 11, 0);
-  const lockSlot2 = slotAt(3, 11, 30);
+  // --- 5-minute submission lock ---
+  const lockSlot1 = futureSlot(3, 11, 0);
+  const lockSlot2 = futureSlot(3, 11, 30);
 
-  const first = await request(base, '/api/coordinator/appointments/schedule', {
+  const first = await request('/api/coordinator/appointments/schedule', {
     method: 'POST',
     token: coordinatorToken,
     body: { ...basePayload, scheduled_at: lockSlot1 }
   });
 
-  if (first.status !== 201) {
-    t.skip(`could not create initial appointment for lock check (status ${first.status})`);
-  }
+  assert.equal(first.status, 201,
+    `initial appointment for lock check must succeed with 201, got ${first.status}: ${JSON.stringify(first.data)}`);
 
-  const second = await request(base, '/api/coordinator/appointments/schedule', {
+  const firstId = first.data.appointmentId;
+  assert.ok(firstId, `first lock-check appointment must return appointmentId: ${JSON.stringify(first.data)}`);
+  assert.ok(Number.isInteger(firstId) && firstId > 0,
+    `lock-check appointmentId must be a positive integer, got: ${firstId}`);
+
+  const second = await request('/api/coordinator/appointments/schedule', {
     method: 'POST',
     token: coordinatorToken,
     body: { ...basePayload, scheduled_at: lockSlot2 }
   });
 
-  assert.equal(second.status, 409);
-  assert.match(String(second.data.error || ''), /submission lock/i);
+  assert.equal(second.status, 409,
+    `second appointment within 5-min lock must return 409, got ${second.status}: ${JSON.stringify(second.data)}`);
+  assert.ok(second.data.error, 'submission lock response must include an error message');
+  assert.match(String(second.data.error), /submission lock/i,
+    `error message must mention submission lock, got: ${second.data.error}`);
 });
