@@ -30,7 +30,7 @@ services:
     volumes:
       - ./unit_tests:/unit_tests:ro
       - ./API_tests:/API_tests:ro
-      - ./backend:/backend:ro
+      - ./backend:/backend
     environment:
       PORT: 4000
       NODE_ENV: development
