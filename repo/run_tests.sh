@@ -17,9 +17,9 @@ cleanup() {
 trap cleanup EXIT
 
 echo "[1/2] Running backend unit tests"
-docker compose exec -T backend sh -c 'cd /app && node --test /unit_tests/*.test.js'
+docker compose exec -T backend sh -c 'ln -sfn /app/node_modules /backend/node_modules && node --test /unit_tests/*.test.js'
 
 echo "[2/2] Running API integration tests"
-docker compose exec -T backend sh -c 'cd /app && node --test /API_tests/*.test.js'
+docker compose exec -T backend sh -c 'ln -sfn /app/node_modules /backend/node_modules && node --test /API_tests/*.test.js'
 
 echo "=== All tests passed ==="
