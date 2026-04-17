@@ -28,6 +28,5 @@ logs/
 
 delivery_acceptance_audit_report.md
 frontend_delivery_acceptance_audit_report.md
-*_audit_report*.md
-*_audit*.md
+
 .opencode/
